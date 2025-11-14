@@ -1,0 +1,7 @@
+strands-agents>=1.0.0
+boto3
+pandas>=2.3.0
+bedrock-agentcore
+awslabs-aws-healthomics-mcp-server
+awslabs.aws-api-mcp-server>=0.0.13
+uv

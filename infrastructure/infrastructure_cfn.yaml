@@ -1,0 +1,510 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Infrastructure for AI-Driven Genomics Workshop with AWS HealthOmics'
+
+Parameters:
+  WorkshopName:
+    Type: String
+    Default: 'genomics-ai-workshop'
+    Description: 'Name prefix for workshop resources'
+
+  OmicsResourcesS3Bucket:
+    Type: String
+
+  OmicsResourcesS3Prefix:
+    Description: Trailing slash required
+    Type: String
+
+  OmicsWorkflowDefinitionZipS3:
+    Type: String
+    Description: S3 location of the workflow definition zip file relative to above S3Bucket and S3Prefix
+    Default: 'mutect.zip'
+  
+
+Resources:
+  
+
+  ECRRegistryPolicy:
+    Type: AWS::ECR::RegistryPolicy
+    Properties:
+      PolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'AllowPTCinRegPermissions'
+            Effect: Allow
+            Principal:
+              Service: omics.amazonaws.com
+            Action:
+              - ecr:CreateRepository
+              - ecr:BatchImportUpstreamImage
+            Resource:
+            #  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/docker-hub/*'
+              - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/quay/*'
+              - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ecr-public/*'
+
+  QuayPullThroughCache:
+    Type: AWS::ECR::PullThroughCacheRule
+    Properties:
+      EcrRepositoryPrefix: quay
+      UpstreamRegistryUrl: quay.io
+
+  QuayRepositoryCreationTemplate:
+    Type: AWS::ECR::RepositoryCreationTemplate
+    Properties:
+      Prefix: quay
+      Description: 'Repository template for Quay.io pull through cache'
+      AppliedFor:
+        - PULL_THROUGH_CACHE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy: |
+        {
+          "rules": [
+            {
+              "rulePriority": 1,
+              "description": "Keep last 10 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 10
+              },
+              "action": {
+                "type": "expire"
+              }
+            }
+          ]
+        }
+      RepositoryPolicy: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowHealthOmicsAccess",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "omics.amazonaws.com"
+              },
+              "Action": [
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchCheckLayerAvailability"
+              ]
+            }
+          ]
+        }
+
+  WorkflowResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Purpose
+          Value: 'Workflow outputs and analysis results'
+        - Key: Name
+          Value: !Sub '${WorkshopName}-results'
+
+  # IAM Roles and Policies
+  WorkshopParticipantRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopName}-participant-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      Policies:
+        - PolicyName: HealthOmicsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt HealthOmicsServiceRole.Arn
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - Effect: Allow
+                Action:
+                  - cloudformation:ListStacks
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*'
+
+  HealthOmicsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopName}-healthomics-service-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: omics.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: HealthOmicsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${WorkflowResultsBucket}/*'
+                  - !Sub 'arn:aws:s3:::${OmicsResourcesS3Bucket}/*'
+                  - !Sub 'arn:aws:s3:::aws-genomics-static-${AWS::Region}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt WorkflowResultsBucket.Arn
+                  - !Sub arn:aws:s3:::${OmicsResourcesS3Bucket}
+                  - !Sub arn:aws:s3:::aws-genomics-static-${AWS::Region}
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/docker-hub/*'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/quay/*'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/ecr-public/*'
+
+  # Create workflow
+  HealthOmicsCreateWorkflow:
+    Properties:
+      DefinitionUri:
+        Fn::Sub: s3://${OmicsResourcesS3Bucket}/${OmicsResourcesS3Prefix}${OmicsWorkflowDefinitionZipS3}
+      Description:
+        Fn::Sub: "Pre-created mutect2 workflow that also converts VCF to MAF"
+      Name:
+        Fn::Sub: ${WorkshopName}-mutect2
+      StorageType: DYNAMIC
+      ContainerRegistryMap:
+        RegistryMappings:
+          - UpstreamRegistryUrl: quay.io
+            EcrRepositoryPrefix: quay
+    Type: AWS::Omics::Workflow
+  
+  # Custom resource to trigger HealthOmics workflow
+  HealthOmicsWorkflowStartRun:
+      Type: Custom::OmicsWorkflowStartRun
+      DependsOn:
+      - HealthOmicsWorkflowStartRunLambda
+      - HealthOmicsCreateWorkflow
+      Properties:
+        Timeout: 240
+        JobRoleArn:
+          Fn::Sub: ${HealthOmicsServiceRole.Arn}
+        OutputS3Path:
+          Fn::Sub: s3://${WorkflowResultsBucket}/omics_output/
+        RunName:
+          Fn::Sub: ${WorkshopName}-mutect-run
+        ParamNormalSampleName: SRR2089364
+        ParamNormalBam: 
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/bams/SRR2089364.hg38.bam
+        ParamNormalBamIndex:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/bams/SRR2089364.hg38.bai
+        ParamTumorSampleName: SRR2089363
+        ParamTumorBam:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/bams/SRR2089363.hg38.bam
+        ParamTumorBamIndex:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/bams/SRR2089363.hg38.bai
+        ParamReferenceFasta:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/broad-references/hg38/v0/Homo_sapiens_assembly38.fasta
+        ParamReferenceFastaIndex:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/broad-references/hg38/v0/Homo_sapiens_assembly38.fasta.fai
+        ParamReferenceDict:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/broad-references/hg38/v0/Homo_sapiens_assembly38.dict
+        ParamVcfMaf:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/maf/test_civic.maf
+        ParamIntervals:
+          Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/intervals/wgs_calling_regions.hg38.interval_list
+        ParamSmallTaskCpu: 8
+        ParamSmallTaskMemory: 16
+        ParamAwsRegion:
+          Fn::Sub: ${AWS::Region}
+        ServiceToken:
+          Fn::Sub: ${HealthOmicsWorkflowStartRunLambda.Arn}
+        WorkflowId: !GetAtt HealthOmicsCreateWorkflow.Id
+      Version: 1
+  
+  HealthOmicsWorkflowStartRunLambda:
+    DependsOn:
+    - HealthOmicsWorkflowStartRunLambdaRole
+    Properties:
+      Code:
+        S3Bucket:
+          Fn::Sub: ${OmicsResourcesS3Bucket}
+        S3Key:
+          Fn::Sub: ${OmicsResourcesS3Prefix}start_workflow_lambda.zip
+      FunctionName:
+        Fn::Sub: ${WorkshopName}-start-workflow
+      Handler: start_workflow_lambda.handler
+      Role:
+        Fn::Sub: ${HealthOmicsWorkflowStartRunLambdaRole.Arn}
+      Runtime: python3.13
+      Timeout: 60
+    Type: AWS::Lambda::Function
+
+  HealthOmicsWorkflowStartRunLambdaRole:
+    DependsOn:
+    - HealthOmicsServiceRole
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Action:
+            - lambda:AddPermission
+            - lambda:RemovePermission
+            - events:PutRule
+            - events:DeleteRule
+            - events:PutTargets
+            - events:RemoveTargets
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - iam:GetRole
+            - iam:PassRole
+            Effect: Allow
+            Resource:
+              Fn::Sub: ${HealthOmicsServiceRole.Arn}
+        PolicyName: WorkflowStartRunPolicy
+    Type: AWS::IAM::Role
+
+  
+  # SageMaker Execution Role
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopName}-sagemaker-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Policies:
+        - PolicyName: HealthOmicsIntegration
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+  
+  RuntimeAgentCoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopName}-agentcore-runtime-role'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock-agentcore.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  WorkshopAgenticActionsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${WorkshopName}-agentic-actions-policy'
+      Roles:
+        - !Ref SageMakerExecutionRole
+        - !Ref RuntimeAgentCoreRole
+        - !Ref HealthOmicsWorkflowStartRunLambdaRole
+        - !Ref WorkshopParticipantRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: IAMRoleAccess
+            Effect: Allow
+            Action:
+              - 'iam:ListRoles'
+              - 'iam:GetRole'
+              - 'iam:PassRole'
+            Resource:
+              - !GetAtt HealthOmicsServiceRole.Arn
+              - 'arn:aws:iam::*:role/*Omics*'
+          - Sid: HealthOmicsFullAccess
+            Effect: Allow
+            Action:
+              - 'omics:ListWorkflows'
+              - 'omics:GetWorkflow'
+              - 'omics:CreateWorkflow'
+              - 'omics:UpdateWorkflow'
+              - 'omics:ListRuns'
+              - 'omics:GetRun'
+              - 'omics:StartRun'
+              - 'omics:CancelRun'
+              - 'omics:ListRunTasks'
+              - 'omics:GetRunTask'
+              - 'omics:ListSequenceStores'
+              - 'omics:GetSequenceStore'
+              - 'omics:ListReferenceStores'
+              - 'omics:GetReferenceStore'
+              - 'omics:ListReferences'
+              - 'omics:GetReference'
+              - 'omics:ListReadSets'
+              - 'omics:GetReadSet'
+              - 'omics:TagResource'
+              - 'omics:UntagResource'
+              - 'omics:ListTagsForResource'
+            Resource: '*'
+          - Sid: S3OutputBucketAccess
+            Effect: Allow
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource:
+              - !GetAtt WorkflowResultsBucket.Arn
+              - !Sub '${WorkflowResultsBucket.Arn}/*'
+          - Sid: BedrockModelInvocation
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+              - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*"
+          - Sid: S3GenomicsDataAccess
+            Effect: Allow
+            Action:
+              - 's3:GetObject'
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource:
+              - 'arn:aws:s3:::aws-genomics-static-*'
+              - 'arn:aws:s3:::aws-genomics-static-*/*'
+          - Sid: CloudWatchLogsAccess
+            Effect: Allow
+            Action:
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+              - 'logs:GetLogEvents'
+              - 'logs:FilterLogEvents'
+            Resource:
+              - 'arn:aws:logs:*:*:log-group:/aws/omics/*'
+          - Sid: STSAccess
+            Effect: Allow
+            Action:
+              - 'sts:GetCallerIdentity'
+            Resource: '*'
+          - Sid: SSMParameterAccess
+            Effect: Allow
+            Action:
+              - 'ssm:GetParameter'
+              - 'ssm:GetParameters'
+              - 'ssm:GetParametersByPath'
+            Resource:
+              - 'arn:aws:ssm:*:*:parameter/aws/service/global-infrastructure/services/omics/*'
+              - 'arn:aws:ssm:*:*:parameter/aws/service/global-infrastructure/regions/*'
+
+  BasicNotebookInstance:
+    Type: "AWS::SageMaker::NotebookInstance"
+    Properties:
+      InstanceType: "ml.m5.xlarge"
+      RoleArn: !GetAtt SageMakerExecutionRole.Arn
+      DirectInternetAccess: "Enabled"
+      VolumeSizeInGB: 50
+      NotebookInstanceName: !Sub '${WorkshopName}-notebook'
+      RootAccess: Enabled
+      
+
+Outputs:
+  HealthOmicsWorkflowId:
+      Description: 'HealthOmics workflow ID'
+      Value: !GetAtt HealthOmicsCreateWorkflow.Id
+      Export:
+        Name: !Sub '${WorkshopName}-workflow-id'
+       
+  WorkflowResultsBucket:
+    Description: 'S3 bucket for workflow results'
+    Value: !Ref WorkflowResultsBucket
+    Export:
+      Name: !Sub '${WorkshopName}-results-bucket'
+
+  ParticipantRoleArn:
+    Description: 'IAM role ARN for workshop participants'
+    Value: !GetAtt WorkshopParticipantRole.Arn
+    Export:
+      Name: !Sub '${WorkshopName}-participant-role'
+
+  HealthOmicsServiceRoleArn:
+    Description: 'IAM role ARN for HealthOmics service'
+    Value: !GetAtt HealthOmicsServiceRole.Arn
+    Export:
+      Name: !Sub '${WorkshopName}-healthomics-role'
+
+  SageMakerExecutionRoleArn:
+    Description: 'SageMaker Execution Role ARN'
+    Value: !GetAtt SageMakerExecutionRole.Arn
+    Export:
+      Name: !Sub '${WorkshopName}-sagemaker-execution-role'
+  
+  AgentCoreRuntimeRoleArn:
+    Description: 'AgentCore Runtime Role ARN'
+    Value: !GetAtt RuntimeAgentCoreRole.Arn
+    Export:
+      Name: !Sub '${WorkshopName}-agentcore-runtime-role'
+
+  BasicNotebookInstanceId:
+    Value: !Ref BasicNotebookInstance
+    Export:
+      Name: !Sub '${WorkshopName}-sagemaker-notebook'
+  
