@@ -149,12 +149,10 @@ def create_qc_agent(mcp_tools):
     # Configure the model provider (using Amazon Bedrock with default Claude model)
     model = BedrockModel(
         # model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",  # inference profile ID
-        # model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        model_id="global.anthropic.claude-sonnet-4-20250514-v1:0",
+        model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        # model_id="global.anthropic.claude-sonnet-4-20250514-v1:0",
         temperature=0.0,  # lower temperature for more focused responses
         max_tokens=4096
-        #cache_prompt="default",  # Cache system prompt
-        #cache_tools="default"     # Cache tool definitions
     )
 
     # Combine MCP tools with custom tools
