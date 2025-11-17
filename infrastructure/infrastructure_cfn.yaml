@@ -422,6 +422,21 @@ Resources:
             Resource:
               - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
               - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*"
+          - Sid: AllowOnlySpecificMarketplaceSubscription
+            Effect: Allow
+            Action:
+            - aws-marketplace:ViewSubscriptions
+            - aws-marketplace:Subscribe
+            Resource: "*"
+            Condition:
+              ForAllValues:StringEquals:
+                aws-marketplace:ProductId:
+                - prod-xdkflymybwmvi
+                - prod-4pmewlybdftbs
+                - prod-4dlfvry4v5hbi
+                - prod-cx7ovbu5wex7g
+              StringEquals:
+                aws:CalledViaLast: bedrock.amazonaws.com
           - Sid: S3GenomicsDataAccess
             Effect: Allow
             Action:
