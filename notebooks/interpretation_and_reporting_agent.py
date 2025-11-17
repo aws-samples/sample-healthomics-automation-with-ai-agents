@@ -627,7 +627,6 @@ def create_cancer_analysis_agent(mcp_tools=None):
         # model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",  # inference profile ID
         model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
         # model_id="global.anthropic.claude-sonnet-4-20250514-v1:0",
-        region_name="us-east-1",
         max_tokens=4096
     )
 
