@@ -26,43 +26,19 @@ def get_genomics_search_config():
         "GENOMICS_SEARCH_ENABLE_HEALTHOMICS": "true"
     }
 
-def get_credentials():
-    session = boto3.Session()
-    credentials = session.get_credentials()
-
-    # Prepare environment variables with AWS credentials
-    # This is only required in notebooks where the host metadata endpoint is blocked
-    env_vars = {
-        "AWS_REGION": session.region_name or 'us-east-1',
-    }
-
-    if credentials:
-        env_vars.update({
-            "AWS_ACCESS_KEY_ID": credentials.access_key,
-            "AWS_SECRET_ACCESS_KEY": credentials.secret_key,
-        })
-        if credentials.token:
-            env_vars["AWS_SESSION_TOKEN"] = credentials.token
-
-    return env_vars
-
 
 def setup_mcp_clients():
     """Set up MCP clients for the multi-agent system"""
     try:
         # Get genomics search configuration
         genomics_config = get_genomics_search_config()
-        creds = get_credentials()
-
-        # merge the two dictionaries
-        env_vars = genomics_config | creds
 
         # Create MCP clients for different services
         healthomics_client = MCPClient(
             lambda: stdio_client(StdioServerParameters(
                 command="uvx",
                 args=["awslabs.aws-healthomics-mcp-server@latest"],
-                env=env_vars
+                env=genomics_config
             ))
         )
 
@@ -71,7 +47,6 @@ def setup_mcp_clients():
             lambda: stdio_client(StdioServerParameters(
                 command="uvx", 
                 args=["awslabs.aws-api-mcp-server@latest"],
-                env=creds
             ))
         )
 
