@@ -1,5 +1,5 @@
 # macOS
-.DS_Store
+*DS_Store
 
 # Kiro IDE
 .kiro/
@@ -13,7 +13,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-
+package/
 # Virtual environments
 .venv/
 venv/
@@ -28,3 +28,8 @@ ENV/
 *.swp
 *.swo
 *~
+
+# notebooks not ready
+notebooks/03-multi-agent-genomics-pipeline.ipynb
+infrastructure/.DS_Store
+*.zip
