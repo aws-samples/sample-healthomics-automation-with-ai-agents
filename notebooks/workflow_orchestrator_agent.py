@@ -144,7 +144,8 @@ def create_healthomics_agent(mcp_tools):
         model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0", # inference profile ID
         # model_id="global.anthropic.claude-sonnet-4-20250514-v1:0",
         temperature=0.0, # lower temperature for more focussed responses
-        max_tokens=4096
+        max_tokens=4096,
+        cache_tools="default"
     )
 
     # Combine MCP tools with built-in tools
