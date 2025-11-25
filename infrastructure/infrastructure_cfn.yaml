@@ -74,7 +74,7 @@ Resources:
             }
           ]
         }
-      RepositoryPolicy: !Sub |
+      RepositoryPolicy: |
         {
           "Version": "2012-10-17",
           "Statement": [
@@ -199,8 +199,7 @@ Resources:
     Properties:
       DefinitionUri:
         Fn::Sub: s3://${OmicsResourcesS3Bucket}/${OmicsResourcesS3Prefix}${OmicsWorkflowDefinitionZipS3}
-      Description:
-        Fn::Sub: "Pre-created mutect2 workflow that also converts VCF to MAF"
+      Description: "Pre-created mutect2 workflow that also converts VCF to MAF"
       Name:
         Fn::Sub: ${WorkshopName}-mutect2
       StorageType: DYNAMIC
@@ -214,8 +213,8 @@ Resources:
   HealthOmicsWorkflowStartRun:
       Type: Custom::OmicsWorkflowStartRun
       DependsOn:
-      - HealthOmicsWorkflowStartRunLambda
-      - HealthOmicsCreateWorkflow
+      - WorkshopAgenticActionsPolicy
+      - QuotaIncreaseRequest
       Properties:
         Timeout: 240
         JobRoleArn:
@@ -254,8 +253,6 @@ Resources:
       Version: 1
   
   HealthOmicsWorkflowStartRunLambda:
-    DependsOn:
-    - HealthOmicsWorkflowStartRunLambdaRole
     Properties:
       Code:
         S3Bucket:
@@ -272,9 +269,8 @@ Resources:
     Type: AWS::Lambda::Function
 
   HealthOmicsWorkflowStartRunLambdaRole:
-    DependsOn:
-    - HealthOmicsServiceRole
     Properties:
+      RoleName: !Sub '${WorkshopName}-start-run-lambda-role'
       AssumeRolePolicyDocument:
         Statement:
         - Action:
@@ -342,20 +338,6 @@ Resources:
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
                 Resource: '*'
-  
-  RuntimeAgentCoreRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${WorkshopName}-agentcore-runtime-role'
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - bedrock-agentcore.amazonaws.com
-            Action:
-              - sts:AssumeRole
 
   WorkshopAgenticActionsPolicy:
     Type: AWS::IAM::Policy
@@ -363,7 +345,6 @@ Resources:
       PolicyName: !Sub '${WorkshopName}-agentic-actions-policy'
       Roles:
         - !Ref SageMakerExecutionRole
-        - !Ref RuntimeAgentCoreRole
         - !Ref HealthOmicsWorkflowStartRunLambdaRole
         - !Ref WorkshopParticipantRole
       PolicyDocument:
@@ -422,21 +403,6 @@ Resources:
             Resource:
               - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
               - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*"
-          - Sid: AllowOnlySpecificMarketplaceSubscription
-            Effect: Allow
-            Action:
-            - aws-marketplace:ViewSubscriptions
-            - aws-marketplace:Subscribe
-            Resource: "*"
-            Condition:
-              ForAllValues:StringEquals:
-                aws-marketplace:ProductId:
-                - prod-xdkflymybwmvi
-                - prod-4pmewlybdftbs
-                - prod-4dlfvry4v5hbi
-                - prod-cx7ovbu5wex7g
-              StringEquals:
-                aws:CalledViaLast: bedrock.amazonaws.com
           - Sid: S3GenomicsDataAccess
             Effect: Allow
             Action:
@@ -469,7 +435,21 @@ Resources:
             Resource:
               - 'arn:aws:ssm:*:*:parameter/aws/service/global-infrastructure/services/omics/*'
               - 'arn:aws:ssm:*:*:parameter/aws/service/global-infrastructure/regions/*'
-
+          - Sid: AllowOnlySpecificMarketplaceSubscription
+            Effect: Allow
+            Action:
+            - aws-marketplace:ViewSubscriptions
+            - aws-marketplace:Subscribe
+            Resource: "*"
+            Condition:
+              ForAllValues:StringEquals:
+                aws-marketplace:ProductId:
+                - prod-xdkflymybwmvi
+                - prod-4pmewlybdftbs
+                - prod-4dlfvry4v5hbi
+                - prod-cx7ovbu5wex7g
+              StringEquals:
+                aws:CalledViaLast: bedrock.amazonaws.com
   BasicNotebookInstance:
     Type: "AWS::SageMaker::NotebookInstance"
     Properties:
@@ -479,7 +459,78 @@ Resources:
       VolumeSizeInGB: 50
       NotebookInstanceName: !Sub '${WorkshopName}-notebook'
       RootAccess: Enabled
-      
+  
+  ServiceQuotaLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopName}-service-quota-lambda-role'
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Action:
+            - lambda:AddPermission
+            - lambda:RemovePermission
+            - events:PutRule
+            - events:DeleteRule
+            - events:PutTargets
+            - events:RemoveTargets
+            Effect: Allow
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - servicequotas:RequestServiceQuotaIncrease
+              - servicequotas:Get*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+            Resource: '*'
+        PolicyName: WorkflowStartRunPolicy
+  
+              
+
+  ServiceQuotaLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket:
+          Fn::Sub: ${OmicsResourcesS3Bucket}
+        S3Key:
+          Fn::Sub: ${OmicsResourcesS3Prefix}request_quota_increase.zip
+      FunctionName:
+        Fn::Sub: ${WorkshopName}-request-quota-increase
+      Handler: request_quota_increase.handler
+      Role:
+        Fn::Sub: ${ServiceQuotaLambdaRole.Arn}
+      Runtime: python3.13
+      Timeout: 60
+  
+  QuotaIncreaseRequest:
+    Type: Custom::ServiceQuotaIncrease
+    DependsOn: 
+      - ServiceQuotaLambdaRole 
+    Properties:
+      ServiceToken: !GetAtt ServiceQuotaLambda.Arn
+      ServiceCode: omics
+      QuotaCode: L-25504C8C 
+      DesiredValue: 100
 
 Outputs:
   HealthOmicsWorkflowId:
@@ -511,12 +562,6 @@ Outputs:
     Value: !GetAtt SageMakerExecutionRole.Arn
     Export:
       Name: !Sub '${WorkshopName}-sagemaker-execution-role'
-  
-  AgentCoreRuntimeRoleArn:
-    Description: 'AgentCore Runtime Role ARN'
-    Value: !GetAtt RuntimeAgentCoreRole.Arn
-    Export:
-      Name: !Sub '${WorkshopName}-agentcore-runtime-role'
 
   BasicNotebookInstanceId:
     Value: !Ref BasicNotebookInstance
