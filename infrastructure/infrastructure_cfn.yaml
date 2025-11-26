@@ -18,7 +18,16 @@ Parameters:
     Type: String
     Description: S3 location of the workflow definition zip file relative to above S3Bucket and S3Prefix
     Default: 'mutect.zip'
+
+  RequestQuotaIncrease:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'Whether to request a service quota increase for HealthOmics workflows'
   
+
+Conditions:
+  ShouldRequestQuotaIncrease: !Equals [!Ref RequestQuotaIncrease, 'true']
 
 Resources:
   
@@ -214,7 +223,6 @@ Resources:
       Type: Custom::OmicsWorkflowStartRun
       DependsOn:
       - WorkshopAgenticActionsPolicy
-      - QuotaIncreaseRequest
       Properties:
         Timeout: 240
         JobRoleArn:
@@ -524,6 +532,7 @@ Resources:
   
   QuotaIncreaseRequest:
     Type: Custom::ServiceQuotaIncrease
+    Condition: ShouldRequestQuotaIncrease
     DependsOn: 
       - ServiceQuotaLambdaRole 
     Properties:
