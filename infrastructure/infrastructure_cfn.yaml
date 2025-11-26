@@ -253,6 +253,7 @@ Resources:
           Fn::Sub: s3://aws-genomics-static-${AWS::Region}/omics-data/tumor-normal/intervals/wgs_calling_regions.hg38.interval_list
         ParamSmallTaskCpu: 8
         ParamSmallTaskMemory: 16
+        ParamScatterCount: 25
         ParamAwsRegion:
           Fn::Sub: ${AWS::Region}
         ServiceToken:

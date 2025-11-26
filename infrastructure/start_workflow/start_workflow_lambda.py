@@ -91,7 +91,8 @@ def start_workflow(event, context):
         "small_task_cpu": int(event['ResourceProperties']['ParamSmallTaskCpu']),
         "small_task_mem": int(event['ResourceProperties']['ParamSmallTaskMemory']),
         "intervals": event['ResourceProperties']['ParamIntervals'],
-        "aws_region": event['ResourceProperties']['ParamAwsRegion']
+        "aws_region": event['ResourceProperties']['ParamAwsRegion'],
+        "scatter_count": int(event['ResourceProperties']['ParamScatterCount'])
     }
 
     try:
