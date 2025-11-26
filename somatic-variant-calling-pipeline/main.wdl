@@ -45,7 +45,7 @@ workflow Mutect2 {
 
         # runtime
         String gatk_docker="quay.io/biocontainers/gatk4:4.6.2.0--py310hdfd78af_1"
-        Int scatter_count=50
+        Int scatter_count
         Int small_task_cpu
         Int small_task_mem
 
